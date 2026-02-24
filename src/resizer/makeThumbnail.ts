@@ -36,7 +36,7 @@ export const makeThumbnail = async (
 
     const resizedBuffer = await Sharp(buffer)
       .resize(width, height)
-      .jpeg()
+      .webp()
       .toBuffer();
 
     logger.debug(

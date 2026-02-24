@@ -1,19 +1,19 @@
 import {
   AcContext,
   assertEnvVar,
-  isAllowedVideoExtension,
   getThumbnailKey,
-  MetricUnit
+  isAllowedExtension,
+  MetricUnit,
+  DIM_DETAIL_HEIGHT,
+  DIM_DETAIL_WIDTH,
+  DIM_THUMBNAIL_HEIGHT,
+  DIM_THUMBNAIL_WIDTH
 } from "@aspan-corporation/ac-shared";
 import type { S3ObjectCreatedNotificationEvent, SQSRecord } from "aws-lambda";
 import assert from "node:assert/strict";
 import { makeThumbnail } from "./makeThumbnail.ts";
 
 const destinationBucket = assertEnvVar("DESTINATION_BUCKET_NAME");
-const THUMBNAIL_RESOLUTIONS: ReadonlyArray<readonly [number, number]> = [
-  [200, 200],
-  [1180, 820]
-];
 
 export const recordHandler = async (
   record: SQSRecord,
@@ -41,7 +41,7 @@ export const recordHandler = async (
   logger.debug("PictureResizingsStarted", { sourceKey });
   metrics.addMetric("PictureResizingsStarted", MetricUnit.Count, 1);
 
-  if (!isAllowedVideoExtension(sourceKey)) {
+  if (!isAllowedExtension(sourceKey)) {
     throw new Error(`extension for ${sourceKey} is not supported`);
   }
 
@@ -52,38 +52,45 @@ export const recordHandler = async (
 
   logger.debug("downloaded media file", { sourceBucket, sourceKey, size });
 
-  await Promise.all(
-    THUMBNAIL_RESOLUTIONS.map(([width, height]) => {
-      const destinationKey = getThumbnailKey({
-        width,
-        height,
-        key: sourceKey
-      });
+  const detailKey = getThumbnailKey({
+    width: DIM_DETAIL_WIDTH,
+    height: DIM_DETAIL_HEIGHT,
+    key: sourceKey
+  });
+  const thumbnailKey = getThumbnailKey({
+    width: DIM_THUMBNAIL_WIDTH,
+    height: DIM_THUMBNAIL_HEIGHT,
+    key: sourceKey
+  });
 
-      logger.debug("resizing and uploading", {
-        width,
-        height,
+  await Promise.all([
+    makeThumbnail(
+      {
+        buffer,
         sourceBucket,
         sourceKey,
         destinationBucket,
-        destinationKey
-      });
-
-      return makeThumbnail(
-        {
-          buffer,
-          sourceBucket,
-          sourceKey,
-          destinationBucket,
-          destinationKey,
-          width,
-          height
-        },
-        context,
-        destinationS3Service
-      );
-    })
-  );
+        destinationKey: detailKey,
+        width: DIM_DETAIL_WIDTH,
+        height: DIM_DETAIL_HEIGHT
+      },
+      context,
+      destinationS3Service
+    ),
+    makeThumbnail(
+      {
+        buffer,
+        sourceBucket,
+        sourceKey,
+        destinationBucket,
+        destinationKey: thumbnailKey,
+        width: DIM_THUMBNAIL_WIDTH,
+        height: DIM_THUMBNAIL_HEIGHT
+      },
+      context,
+      destinationS3Service
+    )
+  ]);
 
   logger.debug("PictureResizingsFinished", { sourceKey });
   metrics.addMetric("PictureResizingsFinished", MetricUnit.Count, 1);
