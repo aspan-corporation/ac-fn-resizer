@@ -34,7 +34,10 @@ export const makeThumbnail = async (
       `starting resizing ${width}x${height} of ${sourceBucket}/${sourceKey}`
     );
 
-    const resizedBuffer = await Sharp(buffer).resize(width, height).jpeg().toBuffer();
+    const resizedBuffer = await Sharp(buffer)
+      .resize(width, height)
+      .jpeg()
+      .toBuffer();
 
     logger.debug(
       `finished resizing ${width}x${height} of ${sourceBucket}/${sourceKey}`
@@ -46,7 +49,9 @@ export const makeThumbnail = async (
       Body: resizedBuffer
     });
 
-    logger.debug(`uploaded resized image to ${destinationBucket}/${destinationKey}`);
+    logger.debug(
+      `uploaded resized image to ${destinationBucket}/${destinationKey}`
+    );
   } finally {
     logger.resetKeys();
   }

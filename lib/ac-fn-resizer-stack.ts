@@ -53,7 +53,8 @@ export class AcFnResizerStack extends cdk.Stack {
         ],
         nodejsOptions: {
           bundling: {
-            externalModules: ["sharp"]
+            externalModules: ["sharp"],
+            target: "es2022"
           }
         },
         environment: {
