@@ -67,7 +67,6 @@ export class AcFnResizerStack extends cdk.Stack {
           DESTINATION_BUCKET_PREFIX: "thumbs",
           LD_LIBRARY_PATH:
             "/opt/lib:/var/lang/lib:/lib64:/usr/lib64:/var/runtime:/var/runtime/lib:/var/task:/var/task/lib",
-          LIBHEIF_PLUGIN_PATH: "/opt/lib",
           VIPSHOME: "/opt",
           AC_IDEMPOTENCY_TABLE_NAME:
             ssm.StringParameter.valueForStringParameter(
