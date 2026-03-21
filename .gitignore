@@ -8,3 +8,5 @@ node_modules
 .cdk.staging
 cdk.out
 .DS_Store
+# Claude Code worktrees
+.claude/worktrees/
