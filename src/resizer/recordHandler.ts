@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import { makeThumbnail } from "./makeThumbnail.ts";
 
 const destinationBucket = assertEnvVar("DESTINATION_BUCKET_NAME");
+const destinationBucketPrefix = process.env.DESTINATION_BUCKET_PREFIX;
 
 export const recordHandler = async (
   record: SQSRecord,
@@ -52,12 +53,13 @@ export const recordHandler = async (
 
   logger.debug("downloaded media file", { sourceBucket, sourceKey, size });
 
-  const detailKey = getThumbnailKey({
+  const keyPrefix = destinationBucketPrefix ? `${destinationBucketPrefix}/` : "";
+  const detailKey = keyPrefix + getThumbnailKey({
     width: DIM_DETAIL_WIDTH,
     height: DIM_DETAIL_HEIGHT,
     key: sourceKey
   });
-  const thumbnailKey = getThumbnailKey({
+  const thumbnailKey = keyPrefix + getThumbnailKey({
     width: DIM_THUMBNAIL_WIDTH,
     height: DIM_THUMBNAIL_HEIGHT,
     key: sourceKey
