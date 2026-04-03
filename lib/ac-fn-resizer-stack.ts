@@ -64,7 +64,6 @@ export class AcFnResizerStack extends cdk.Stack {
             this,
             "/ac/storage/thumbs-bucket-name"
           ),
-          DESTINATION_BUCKET_PREFIX: "thumbs",
           LD_LIBRARY_PATH:
             "/opt/lib:/var/lang/lib:/lib64:/usr/lib64:/var/runtime:/var/runtime/lib:/var/task:/var/task/lib",
           VIPSHOME: "/opt",
