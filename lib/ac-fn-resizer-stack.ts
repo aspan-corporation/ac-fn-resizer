@@ -42,8 +42,8 @@ export class AcFnResizerStack extends cdk.Stack {
         memorySize: 2048,
         timeout: cdk.Duration.seconds(400),
         batchSize: 1,
-        maxReceiveCount: 10,
-        // reservedConcurrentExecutions: 10, // Removed: account doesn't have enough unreserved concurrency
+        maxReceiveCount: 3,
+        reservedConcurrentExecutions: 10,
         layers: [
           lambda.LayerVersion.fromLayerVersionArn(
             this,
