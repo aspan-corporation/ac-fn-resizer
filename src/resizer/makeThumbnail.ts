@@ -29,6 +29,10 @@ export const makeThumbnail = async (
 ) => {
   logger.appendKeys({ function: "makeThumbnail" });
 
+  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+    throw new Error(`Invalid thumbnail dimensions: ${width}x${height}`);
+  }
+
   try {
     logger.debug(
       `starting resizing ${width}x${height} of ${sourceBucket}/${sourceKey}`

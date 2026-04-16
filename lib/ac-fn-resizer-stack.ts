@@ -116,7 +116,7 @@ export class AcFnResizerStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ["sts:AssumeRole"],
         resources: [
-          "arn:aws:iam::433003433222:role/aspan-corporation/ac-s3-media-read-access"
+          `arn:aws:iam::${this.account}:role/aspan-corporation/ac-s3-media-read-access`
         ]
       })
     );

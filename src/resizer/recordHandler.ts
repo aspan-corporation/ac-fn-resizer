@@ -29,14 +29,25 @@ export const recordHandler = async (
 
   const payload = record.body;
   assert(payload, "SQS record has no body");
-  const item = JSON.parse(payload);
+
+  let item: S3ObjectCreatedNotificationEvent;
+  try {
+    item = JSON.parse(payload) as S3ObjectCreatedNotificationEvent;
+  } catch (e) {
+    logger.error("Failed to parse SQS record payload", { error: e });
+    throw new Error(`Failed to parse SQS record payload: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
   const {
     detail: {
       object: { key: sourceKey, size },
       bucket: { name: sourceBucket }
     }
-  } = item as S3ObjectCreatedNotificationEvent;
+  } = item;
+
+  assert(sourceKey, "detail.object.key is missing from event payload");
+  assert(size !== undefined && size !== null, "detail.object.size is missing from event payload");
+  assert(sourceBucket, "detail.bucket.name is missing from event payload");
 
   logger.debug("PictureResizingsStarted", { sourceKey });
   metrics.addMetric("PictureResizingsStarted", MetricUnit.Count, 1);
