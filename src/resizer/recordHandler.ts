@@ -14,18 +14,18 @@ import assert from "node:assert/strict";
 import { makeThumbnail } from "./makeThumbnail.ts";
 
 const destinationBucket = assertEnvVar("DESTINATION_BUCKET_NAME");
+const metaTableName = assertEnvVar("AC_TAU_MEDIA_META_TABLE_NAME");
+const TAG_HIDDEN = "ac:ediacara:hidden";
 
 export const recordHandler = async (
   record: SQSRecord,
   context: AcContext
 ): Promise<void> => {
   const { logger, metrics } = context;
-  const { sourceS3Service, destinationS3Service } = context.acServices || {};
+  const { sourceS3Service, destinationS3Service, dynamoDBService } = context.acServices || {};
   assert(sourceS3Service, "s3Service is required in servicesContext");
-  assert(
-    destinationS3Service,
-    "destinantionS3Service is required in servicesContext"
-  );
+  assert(destinationS3Service, "destinantionS3Service is required in servicesContext");
+  assert(dynamoDBService, "dynamoDBService is required in servicesContext");
 
   const payload = record.body;
   assert(payload, "SQS record has no body");
@@ -48,6 +48,15 @@ export const recordHandler = async (
   assert(sourceKey, "detail.object.key is missing from event payload");
   assert(size !== undefined && size !== null, "detail.object.size is missing from event payload");
   assert(sourceBucket, "detail.bucket.name is missing from event payload");
+
+  const { Item: metaItem } = await dynamoDBService.getCommand({
+    TableName: metaTableName,
+    Key: { id: sourceKey },
+  });
+  if ((metaItem?.tags as { key: string }[] | undefined)?.some((t) => t.key === TAG_HIDDEN)) {
+    logger.info("Skipping hidden file", { sourceKey });
+    return;
+  }
 
   logger.debug("PictureResizingsStarted", { sourceKey });
   metrics.addMetric("PictureResizingsStarted", MetricUnit.Count, 1);
