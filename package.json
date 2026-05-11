@@ -51,7 +51,6 @@
   "dependencies": {
     "@aspan-corporation/ac-shared": "^1.2.21",
     "@aws-sdk/client-sfn": "^3.1045.0",
-    "exifr": "^7.1.3",
     "sharp": "^0.34.5"
   }
 }

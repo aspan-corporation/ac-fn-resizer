@@ -1,5 +1,4 @@
 import { AcContext, S3Service } from "@aspan-corporation/ac-shared";
-import exifr from "exifr";
 import Sharp from "sharp";
 
 type ResizeParams = {
@@ -13,33 +12,14 @@ type ResizeParams = {
 };
 
 /**
- * Map EXIF Orientation tag (1–8) → degrees of clockwise rotation needed to
- * display the image correctly. We pass the angle to Sharp explicitly rather
- * than calling `.rotate()` (no-args), because the Sharp layer's custom libvips
- * was built without libexif, so libvips-side auto-orient is a silent no-op.
- *
- * Note: this only handles the four pure-rotation orientations (1,3,6,8) — the
- * mirrored orientations (2,4,5,7) are vanishingly rare for camera output and
- * would require Sharp.flip()/flop() in addition to rotate. If we ever start
- * seeing them in real photos we can extend this.
- *
- * Reference: EXIF Orientation values
- *   1 = Horizontal (normal)        → 0°
- *   3 = Rotate 180                  → 180°
- *   6 = Rotate 90 CW                → 90°
- *   8 = Rotate 270 CW (= 90 CCW)    → 270°
- */
-const orientationToRotation = (orientation: number | undefined): number => {
-  switch (orientation) {
-    case 3: return 180;
-    case 6: return 90;
-    case 8: return 270;
-    default: return 0;
-  }
-};
-
-/**
  * Resizes an image and uploads it to S3. Output is always WebP.
+ *
+ * Orientation: `Sharp(buffer).rotate()` (no args) calls libvips_autorot, which
+ * honours the EXIF Orientation tag (1–8, including mirrored 2/4/5/7) for JPEG
+ * and PNG. For HEIC, libheif applies the HEIF `irot` transform during decode
+ * and then clears the orientation metadata, so .rotate() is a safe no-op.
+ * This requires the Sharp layer to be built with libexif support — see
+ * ac-sharp/layers/sharp/Makefile.
  */
 export const makeThumbnail = async (
   {
@@ -52,8 +32,7 @@ export const makeThumbnail = async (
     height
   }: ResizeParams,
   { logger }: AcContext,
-  destinationS3Service: S3Service,
-  orientation: number | undefined
+  destinationS3Service: S3Service
 ) => {
   logger.appendKeys({ function: "makeThumbnail" });
 
@@ -66,19 +45,14 @@ export const makeThumbnail = async (
       `starting resizing ${width}x${height} of ${sourceBucket}/${sourceKey}`
     );
 
-    const angle = orientationToRotation(orientation);
-
-    let pipeline = Sharp(buffer);
-    if (angle !== 0) {
-      pipeline = pipeline.rotate(angle);
-    }
-    const resizedBuffer = await pipeline
+    const resizedBuffer = await Sharp(buffer)
+      .rotate() // libvips_autorot — handles all 8 EXIF orientations
       .resize(width, height)
       .webp()
       .toBuffer();
 
     logger.debug(
-      `finished resizing ${width}x${height} of ${sourceBucket}/${sourceKey} (rotated ${angle}°)`
+      `finished resizing ${width}x${height} of ${sourceBucket}/${sourceKey}`
     );
 
     await destinationS3Service.putObject({
@@ -92,31 +66,5 @@ export const makeThumbnail = async (
     );
   } finally {
     logger.resetKeys();
-  }
-};
-
-/**
- * Reads EXIF Orientation from the source buffer using exifr (pure JS — works
- * for JPEG and HEIC regardless of what libvips/libheif features are present
- * in the Sharp Lambda layer). Returns the numeric value 1–8 (or undefined if
- * the image has no EXIF orientation or parsing fails).
- */
-export const readExifOrientation = async (
-  buffer: Buffer,
-  logger: AcContext["logger"]
-): Promise<number | undefined> => {
-  try {
-    // translateValues: false → keep raw numeric Orientation (1–8) instead of
-    // exifr's human-readable string ("Rotate 90 CW" etc.). We want the number
-    // because we map it directly to a rotation angle.
-    const parsed = await exifr.parse(buffer, { translateValues: false });
-    const v = parsed?.Orientation;
-    if (typeof v === "number" && v >= 1 && v <= 8) return v;
-    return undefined;
-  } catch (err) {
-    logger.warn("readExifOrientation failed", {
-      reason: err instanceof Error ? err.message : String(err),
-    });
-    return undefined;
   }
 };

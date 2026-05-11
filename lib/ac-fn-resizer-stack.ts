@@ -66,11 +66,11 @@ export class AcFnResizerStack extends cdk.Stack {
           ),
           // No LD_LIBRARY_PATH / VIPSHOME — the Sharp layer's libvips is at
           // /opt/lib, which Lambda already includes in the default LD_LIBRARY_PATH.
-          // The custom-built libvips in this layer has HEIC support (libde265) but
-          // was compiled without libexif, so we cannot rely on libvips's auto-orient.
-          // Instead, the resizer reads EXIF Orientation in Node code (via the
-          // `exifr` package — pure JS, works for both JPEG and HEIC) and passes an
-          // explicit angle to Sharp.rotate(N). See src/resizer/makeThumbnail.ts.
+          // The Sharp layer is built with libexif support, so Sharp's auto-orient
+          // (`.rotate()` with no args → libvips_autorot) handles all 8 EXIF
+          // orientations for JPEG/PNG, and is a safe no-op for HEIC (libheif
+          // applies the HEIF `irot` during decode). See src/resizer/makeThumbnail.ts
+          // and ac-sharp/layers/sharp/Makefile.
           AC_IDEMPOTENCY_TABLE_NAME:
             ssm.StringParameter.valueForStringParameter(
               this,

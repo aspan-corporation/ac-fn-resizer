@@ -12,7 +12,7 @@ import {
 import { SFNClient, SendTaskSuccessCommand } from "@aws-sdk/client-sfn";
 import type { S3ObjectCreatedNotificationEvent, SQSRecord } from "aws-lambda";
 import assert from "node:assert/strict";
-import { makeThumbnail, readExifOrientation } from "./makeThumbnail.ts";
+import { makeThumbnail } from "./makeThumbnail.ts";
 
 const sfnClient = new SFNClient({});
 
@@ -77,20 +77,12 @@ export const recordHandler = async (
 
   logger.debug("downloaded media file", { sourceBucket, sourceKey, size });
 
-  // Read EXIF Orientation once (pure JS — independent of the Sharp layer's
-  // libvips/libexif build). We pass the value into both thumbnail sizes so
-  // they share one EXIF parse instead of doing it twice in parallel.
-  //
-  // IMPORTANT: only apply this for JPEG/PNG. For HEIC/HEIF, libvips/libheif
-  // ALREADY applies the HEIF `irot` transform during decode, so the buffer
-  // Sharp receives is correctly oriented. Applying an additional rotate() on
-  // top would double-rotate. (Our custom libvips was built without libexif,
-  // so for JPEG it does NOT auto-rotate — hence the manual rotate is needed
-  // there.)
-  const isHeic = /\.hei[cf]$/i.test(sourceKey);
-  const orientation = isHeic
-    ? undefined
-    : await readExifOrientation(buffer, logger);
+  // Orientation is handled inside makeThumbnail() via Sharp's `.rotate()` with
+  // no args, which calls libvips_autorot. Our Sharp layer is built with
+  // libexif support, so this works for both JPEG (uses EXIF Orientation) and
+  // HEIC (libheif applies `irot` during decode and clears the orientation
+  // metadata, so .rotate() is a safe no-op). All 8 EXIF orientations are
+  // handled correctly, including the mirrored ones (2,4,5,7).
 
   const detailKey = getThumbnailKey({
     width: DIM_DETAIL_WIDTH,
@@ -115,8 +107,7 @@ export const recordHandler = async (
         height: DIM_DETAIL_HEIGHT
       },
       context,
-      destinationS3Service,
-      orientation
+      destinationS3Service
     ),
     makeThumbnail(
       {
@@ -129,8 +120,7 @@ export const recordHandler = async (
         height: DIM_THUMBNAIL_HEIGHT
       },
       context,
-      destinationS3Service,
-      orientation
+      destinationS3Service
     )
   ]);
 
