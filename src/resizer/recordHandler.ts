@@ -9,9 +9,12 @@ import {
   DIM_THUMBNAIL_HEIGHT,
   DIM_THUMBNAIL_WIDTH
 } from "@aspan-corporation/ac-shared";
+import { SFNClient, SendTaskSuccessCommand } from "@aws-sdk/client-sfn";
 import type { S3ObjectCreatedNotificationEvent, SQSRecord } from "aws-lambda";
 import assert from "node:assert/strict";
-import { makeThumbnail } from "./makeThumbnail.ts";
+import { makeThumbnail, readExifOrientation } from "./makeThumbnail.ts";
+
+const sfnClient = new SFNClient({});
 
 const destinationBucket = assertEnvVar("DESTINATION_BUCKET_NAME");
 const metaTableName = assertEnvVar("AC_TAU_MEDIA_META_TABLE_NAME");
@@ -30,13 +33,15 @@ export const recordHandler = async (
   const payload = record.body;
   assert(payload, "SQS record has no body");
 
-  let item: S3ObjectCreatedNotificationEvent;
+  let parsed: Record<string, unknown>;
   try {
-    item = JSON.parse(payload) as S3ObjectCreatedNotificationEvent;
+    parsed = JSON.parse(payload) as Record<string, unknown>;
   } catch (e) {
     logger.error("Failed to parse SQS record payload", { error: e });
     throw new Error(`Failed to parse SQS record payload: ${e instanceof Error ? e.message : String(e)}`);
   }
+  const taskToken = typeof parsed.taskToken === "string" ? parsed.taskToken : undefined;
+  const item = parsed as unknown as S3ObjectCreatedNotificationEvent;
 
   const {
     detail: {
@@ -72,6 +77,11 @@ export const recordHandler = async (
 
   logger.debug("downloaded media file", { sourceBucket, sourceKey, size });
 
+  // Read EXIF Orientation once (pure JS — independent of the Sharp layer's
+  // libvips/libexif build). We pass the value into both thumbnail sizes so
+  // they share one EXIF parse instead of doing it twice in parallel.
+  const orientation = await readExifOrientation(buffer, logger);
+
   const detailKey = getThumbnailKey({
     width: DIM_DETAIL_WIDTH,
     height: DIM_DETAIL_HEIGHT,
@@ -95,7 +105,8 @@ export const recordHandler = async (
         height: DIM_DETAIL_HEIGHT
       },
       context,
-      destinationS3Service
+      destinationS3Service,
+      orientation
     ),
     makeThumbnail(
       {
@@ -108,10 +119,18 @@ export const recordHandler = async (
         height: DIM_THUMBNAIL_HEIGHT
       },
       context,
-      destinationS3Service
+      destinationS3Service,
+      orientation
     )
   ]);
 
   logger.debug("PictureResizingsFinished", { sourceKey });
   metrics.addMetric("PictureResizingsFinished", MetricUnit.Count, 1);
+
+  if (taskToken) {
+    await sfnClient.send(new SendTaskSuccessCommand({
+      taskToken,
+      output: JSON.stringify({ resized: true }),
+    }));
+  }
 };

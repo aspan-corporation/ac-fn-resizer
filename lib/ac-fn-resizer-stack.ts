@@ -64,9 +64,13 @@ export class AcFnResizerStack extends cdk.Stack {
             this,
             "/ac/storage/thumbs-bucket-name"
           ),
-          LD_LIBRARY_PATH:
-            "/opt/lib:/var/lang/lib:/lib64:/usr/lib64:/var/runtime:/var/runtime/lib:/var/task:/var/task/lib",
-          VIPSHOME: "/opt",
+          // No LD_LIBRARY_PATH / VIPSHOME — the Sharp layer's libvips is at
+          // /opt/lib, which Lambda already includes in the default LD_LIBRARY_PATH.
+          // The custom-built libvips in this layer has HEIC support (libde265) but
+          // was compiled without libexif, so we cannot rely on libvips's auto-orient.
+          // Instead, the resizer reads EXIF Orientation in Node code (via the
+          // `exifr` package — pure JS, works for both JPEG and HEIC) and passes an
+          // explicit angle to Sharp.rotate(N). See src/resizer/makeThumbnail.ts.
           AC_IDEMPOTENCY_TABLE_NAME:
             ssm.StringParameter.valueForStringParameter(
               this,
@@ -158,10 +162,14 @@ export class AcFnResizerStack extends cdk.Stack {
       })
     );
 
-    // Store the queue URL in SSM Parameter Store for external access
+    // Store the queue URL and ARN in SSM for external access
     new ssm.StringParameter(this, "ResizerProcessorQueueUrlParameter", {
       parameterName: "/ac/resizer/queue-url",
       stringValue: resizerProcessor.queue.queueUrl
+    });
+    new ssm.StringParameter(this, "ResizerProcessorQueueArnParameter", {
+      parameterName: "/ac/resizer/queue-arn",
+      stringValue: resizerProcessor.queue.queueArn
     });
   }
 }
