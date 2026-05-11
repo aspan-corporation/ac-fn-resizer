@@ -80,7 +80,17 @@ export const recordHandler = async (
   // Read EXIF Orientation once (pure JS — independent of the Sharp layer's
   // libvips/libexif build). We pass the value into both thumbnail sizes so
   // they share one EXIF parse instead of doing it twice in parallel.
-  const orientation = await readExifOrientation(buffer, logger);
+  //
+  // IMPORTANT: only apply this for JPEG/PNG. For HEIC/HEIF, libvips/libheif
+  // ALREADY applies the HEIF `irot` transform during decode, so the buffer
+  // Sharp receives is correctly oriented. Applying an additional rotate() on
+  // top would double-rotate. (Our custom libvips was built without libexif,
+  // so for JPEG it does NOT auto-rotate — hence the manual rotate is needed
+  // there.)
+  const isHeic = /\.hei[cf]$/i.test(sourceKey);
+  const orientation = isHeic
+    ? undefined
+    : await readExifOrientation(buffer, logger);
 
   const detailKey = getThumbnailKey({
     width: DIM_DETAIL_WIDTH,
