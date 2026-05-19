@@ -45,9 +45,23 @@ export const makeThumbnail = async (
       `starting resizing ${width}x${height} of ${sourceBucket}/${sourceKey}`
     );
 
-    const resizedBuffer = await Sharp(buffer)
+    // `fit: 'contain'` scales the image so its full content fits inside the
+    // target box while preserving the original aspect ratio. Sharp's default
+    // (`fit: 'cover'`) would crop edges to fill the box — we don't want that
+    // for thumbnails because it hides parts of the picture.
+    //
+    // The leftover space is filled with a fully transparent pixel; WebP
+    // supports alpha, so the thumbnail will be letterboxed/pillarboxed
+    // transparently and blend cleanly against any background colour in the UI.
+    // `failOnError: false` tells libvips to recover from minor JPEG/PNG
+    // encoding errors (e.g. invalid SOS parameters) rather than throw.
+    // Without it, slightly-corrupt-but-displayable files fail entirely.
+    const resizedBuffer = await Sharp(buffer, { failOnError: false })
       .rotate() // libvips_autorot — handles all 8 EXIF orientations
-      .resize(width, height)
+      .resize(width, height, {
+        fit: "contain",
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
+      })
       .webp()
       .toBuffer();
 
