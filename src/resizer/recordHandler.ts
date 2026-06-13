@@ -13,6 +13,7 @@ import { SFNClient, SendTaskSuccessCommand } from "@aws-sdk/client-sfn";
 import type { S3ObjectCreatedNotificationEvent, SQSRecord } from "aws-lambda";
 import assert from "node:assert/strict";
 import { makeThumbnail } from "./makeThumbnail.ts";
+import { computeImageMeta } from "./imageMeta.ts";
 
 const sfnClient = new SFNClient({});
 
@@ -95,6 +96,11 @@ export const recordHandler = async (
     key: sourceKey
   });
 
+  // BlurHash + oriented dimensions, computed once from the source buffer in
+  // parallel with the two thumbnail renders. Powers the justified grid layout
+  // (aspect ratio) and the blur-up placeholder.
+  const imageMetaPromise = computeImageMeta(buffer);
+
   await Promise.all([
     makeThumbnail(
       {
@@ -123,6 +129,29 @@ export const recordHandler = async (
       destinationS3Service
     )
   ]);
+
+  // Persist blurhash + dimensions onto the existing meta item (written earlier
+  // in the pipeline by the metadata extractor). attribute_exists guards against
+  // creating a tagless partial item if the meta row isn't present yet; a miss
+  // is logged and ignored so it never fails the resize/SendTaskSuccess.
+  try {
+    const { blurhash, width, height } = await imageMetaPromise;
+    await dynamoDBService.updateCommand({
+      TableName: metaTableName,
+      Key: { id: sourceKey },
+      UpdateExpression: "SET #bh = :bh, #w = :w, #h = :h",
+      ConditionExpression: "attribute_exists(id)",
+      ExpressionAttributeNames: { "#bh": "blurhash", "#w": "width", "#h": "height" },
+      ExpressionAttributeValues: { ":bh": blurhash, ":w": width, ":h": height }
+    });
+  } catch (e) {
+    const name = e instanceof Error ? e.name : String(e);
+    if (name === "ConditionalCheckFailedException") {
+      logger.warn("meta item absent; skipped blurhash/dimensions write", { sourceKey });
+    } else {
+      logger.error("failed to write blurhash/dimensions", { sourceKey, error: e });
+    }
+  }
 
   logger.debug("PictureResizingsFinished", { sourceKey });
   metrics.addMetric("PictureResizingsFinished", MetricUnit.Count, 1);

@@ -45,25 +45,23 @@ export const makeThumbnail = async (
       `starting resizing ${width}x${height} of ${sourceBucket}/${sourceKey}`
     );
 
-    // `fit: 'contain'` scales the image so its full content fits inside the
-    // target box while preserving the original aspect ratio. Sharp's default
-    // (`fit: 'cover'`) would crop edges to fill the box — we don't want that
-    // for thumbnails because it hides parts of the picture.
-    //
-    // The leftover space is filled with a fully transparent pixel; WebP
-    // supports alpha, so the thumbnail will be letterboxed/pillarboxed
-    // transparently and blend cleanly against any background colour in the UI.
+    // `fit: 'inside'` scales the image so its full content fits inside the
+    // target box while preserving the original aspect ratio — but, unlike
+    // `'contain'`, it does NOT pad the leftover space. The output therefore has
+    // the image's true aspect ratio (e.g. 320x213 for a 3:2 photo) with no
+    // transparent letterbox bars. This is what the justified/aspect-ratio grid
+    // needs: each cell takes the image's aspect and the thumbnail fills it
+    // cleanly. `withoutEnlargement` keeps small originals from being upscaled.
     // `failOnError: false` tells libvips to recover from minor JPEG/PNG
     // encoding errors (e.g. invalid SOS parameters) rather than throw.
-    // Without it, slightly-corrupt-but-displayable files fail entirely.
-    const resizedBuffer = await Sharp(buffer, { failOnError: false })
+    const { data: resizedBuffer, info } = await Sharp(buffer, { failOnError: false })
       .rotate() // libvips_autorot — handles all 8 EXIF orientations
       .resize(width, height, {
-        fit: "contain",
-        background: { r: 0, g: 0, b: 0, alpha: 0 }
+        fit: "inside",
+        withoutEnlargement: true
       })
       .webp()
-      .toBuffer();
+      .toBuffer({ resolveWithObject: true });
 
     logger.debug(
       `finished resizing ${width}x${height} of ${sourceBucket}/${sourceKey}`
@@ -72,12 +70,17 @@ export const makeThumbnail = async (
     await destinationS3Service.putObject({
       Bucket: destinationBucket,
       Key: destinationKey,
-      Body: resizedBuffer
+      Body: resizedBuffer,
+      // Correct content type so CloudFront/browsers treat it as an image
+      // (previously omitted → served as application/octet-stream).
+      ContentType: "image/webp"
     });
 
     logger.debug(
       `uploaded resized image to ${destinationBucket}/${destinationKey}`
     );
+
+    return { width: info.width, height: info.height };
   } finally {
     logger.resetKeys();
   }
