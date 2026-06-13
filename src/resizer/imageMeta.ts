@@ -28,12 +28,14 @@ export const computeImageMeta = async (
   buffer: Buffer
 ): Promise<ImageMeta | null> => {
   try {
-    const meta = await Sharp(buffer, { failOnError: false }).metadata();
+    // unlimited: true — see makeThumbnail; lifts libvips' HEIF iref cap so
+    // high-reference iPhone HEICs decode rather than throwing.
+    const meta = await Sharp(buffer, { failOnError: false, unlimited: true }).metadata();
     const swap = (meta.orientation ?? 0) >= 5;
     const width = (swap ? meta.height : meta.width) ?? 0;
     const height = (swap ? meta.width : meta.height) ?? 0;
 
-    const { data, info } = await Sharp(buffer, { failOnError: false })
+    const { data, info } = await Sharp(buffer, { failOnError: false, unlimited: true })
       .rotate()
       .resize(64, 64, { fit: "inside" })
       .ensureAlpha()

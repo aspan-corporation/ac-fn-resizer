@@ -54,7 +54,12 @@ export const makeThumbnail = async (
     // cleanly. `withoutEnlargement` keeps small originals from being upscaled.
     // `failOnError: false` tells libvips to recover from minor JPEG/PNG
     // encoding errors (e.g. invalid SOS parameters) rather than throw.
-    const { data: resizedBuffer, info } = await Sharp(buffer, { failOnError: false })
+    // `unlimited: true` removes libvips' conservative HEIF safety limits — in
+    // particular libheif's iref `max_items` cap (libvips defaults it to 16),
+    // which otherwise rejects legitimate iPhone HEICs that carry many item
+    // references (HDR gain maps, depth, tiles, …). Safe here: the inputs are
+    // the owner's own library, not untrusted uploads.
+    const { data: resizedBuffer, info } = await Sharp(buffer, { failOnError: false, unlimited: true })
       .rotate() // libvips_autorot — handles all 8 EXIF orientations
       .resize(width, height, {
         fit: "inside",
