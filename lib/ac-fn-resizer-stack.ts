@@ -134,7 +134,9 @@ export class AcFnResizerStack extends cdk.Stack {
 
     resizerProcessor.processor.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["dynamodb:GetItem", "dynamodb:DescribeTable"],
+        // UpdateItem is needed to persist blurhash + oriented dimensions onto
+        // the meta item after resizing (the hidden-check read uses GetItem).
+        actions: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:DescribeTable"],
         resources: [metaTableArn]
       })
     );
