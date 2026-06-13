@@ -98,8 +98,11 @@ export const recordHandler = async (
 
   // BlurHash + oriented dimensions, computed once from the source buffer in
   // parallel with the two thumbnail renders. Powers the justified grid layout
-  // (aspect ratio) and the blur-up placeholder.
-  const imageMetaPromise = computeImageMeta(buffer);
+  // (aspect ratio) and the blur-up placeholder. computeImageMeta is resilient
+  // (resolves null on any failure); the extra `.catch` is belt-and-suspenders
+  // so a rejection can never become an unhandled rejection that crashes the
+  // invocation before this promise is awaited below.
+  const imageMetaPromise = computeImageMeta(buffer).catch(() => null);
 
   await Promise.all([
     makeThumbnail(
@@ -134,23 +137,31 @@ export const recordHandler = async (
   // in the pipeline by the metadata extractor). attribute_exists guards against
   // creating a tagless partial item if the meta row isn't present yet; a miss
   // is logged and ignored so it never fails the resize/SendTaskSuccess.
-  try {
-    const { blurhash, width, height } = await imageMetaPromise;
-    await dynamoDBService.updateCommand({
-      TableName: metaTableName,
-      Key: { id: sourceKey },
-      UpdateExpression: "SET #bh = :bh, #w = :w, #h = :h",
-      ConditionExpression: "attribute_exists(id)",
-      ExpressionAttributeNames: { "#bh": "blurhash", "#w": "width", "#h": "height" },
-      ExpressionAttributeValues: { ":bh": blurhash, ":w": width, ":h": height }
-    });
-  } catch (e) {
-    const name = e instanceof Error ? e.name : String(e);
-    if (name === "ConditionalCheckFailedException") {
-      logger.warn("meta item absent; skipped blurhash/dimensions write", { sourceKey });
-    } else {
-      logger.error("failed to write blurhash/dimensions", { sourceKey, error: e });
+  const imageMeta = await imageMetaPromise;
+  if (imageMeta) {
+    try {
+      await dynamoDBService.updateCommand({
+        TableName: metaTableName,
+        Key: { id: sourceKey },
+        UpdateExpression: "SET #bh = :bh, #w = :w, #h = :h",
+        ConditionExpression: "attribute_exists(id)",
+        ExpressionAttributeNames: { "#bh": "blurhash", "#w": "width", "#h": "height" },
+        ExpressionAttributeValues: {
+          ":bh": imageMeta.blurhash,
+          ":w": imageMeta.width,
+          ":h": imageMeta.height
+        }
+      });
+    } catch (e) {
+      const name = e instanceof Error ? e.name : String(e);
+      if (name === "ConditionalCheckFailedException") {
+        logger.warn("meta item absent; skipped blurhash/dimensions write", { sourceKey });
+      } else {
+        logger.error("failed to write blurhash/dimensions", { sourceKey, error: e });
+      }
     }
+  } else {
+    logger.warn("could not compute image metadata; skipped blurhash/dimensions", { sourceKey });
   }
 
   logger.debug("PictureResizingsFinished", { sourceKey });
