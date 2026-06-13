@@ -21,6 +21,11 @@ const destinationBucket = assertEnvVar("DESTINATION_BUCKET_NAME");
 const metaTableName = assertEnvVar("AC_TAU_MEDIA_META_TABLE_NAME");
 const TAG_HIDDEN = "ac:ediacara:hidden";
 
+// Sharp/libvips/libheif messages for permanent (non-retryable) decode
+// failures — the source can't be decoded by this layer, so retrying is futile.
+const UNDECODABLE_RE =
+  /heif|corrupt header|security limit|unsupported image format|unsupported (?:colour|color)|bad seek|VipsForeignLoad|Input buffer has corrupt header/i;
+
 export const recordHandler = async (
   record: SQSRecord,
   context: AcContext
@@ -104,34 +109,55 @@ export const recordHandler = async (
   // invocation before this promise is awaited below.
   const imageMetaPromise = computeImageMeta(buffer).catch(() => null);
 
-  await Promise.all([
-    makeThumbnail(
-      {
-        buffer,
-        sourceBucket,
-        sourceKey,
-        destinationBucket,
-        destinationKey: detailKey,
-        width: DIM_DETAIL_WIDTH,
-        height: DIM_DETAIL_HEIGHT
-      },
-      context,
-      destinationS3Service
-    ),
-    makeThumbnail(
-      {
-        buffer,
-        sourceBucket,
-        sourceKey,
-        destinationBucket,
-        destinationKey: thumbnailKey,
-        width: DIM_THUMBNAIL_WIDTH,
-        height: DIM_THUMBNAIL_HEIGHT
-      },
-      context,
-      destinationS3Service
-    )
-  ]);
+  try {
+    await Promise.all([
+      makeThumbnail(
+        {
+          buffer,
+          sourceBucket,
+          sourceKey,
+          destinationBucket,
+          destinationKey: detailKey,
+          width: DIM_DETAIL_WIDTH,
+          height: DIM_DETAIL_HEIGHT
+        },
+        context,
+        destinationS3Service
+      ),
+      makeThumbnail(
+        {
+          buffer,
+          sourceBucket,
+          sourceKey,
+          destinationBucket,
+          destinationKey: thumbnailKey,
+          width: DIM_THUMBNAIL_WIDTH,
+          height: DIM_THUMBNAIL_HEIGHT
+        },
+        context,
+        destinationS3Service
+      )
+    ]);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // Permanent decode failures (e.g. libheif security limits like iref-box
+    // reference counts on some iPhone HEICs, or a corrupt/unsupported source)
+    // can never succeed on retry — skip the item rather than DLQ-storm. Any
+    // existing thumbnail is left in place. Transient errors (S3 blips, etc.)
+    // are rethrown so SQS retries them normally.
+    if (UNDECODABLE_RE.test(msg)) {
+      logger.warn("undecodable source; skipping thumbnail generation", { sourceKey, error: msg });
+      metrics.addMetric("PictureResizingSkipped", MetricUnit.Count, 1);
+      if (taskToken) {
+        await sfnClient.send(new SendTaskSuccessCommand({
+          taskToken,
+          output: JSON.stringify({ resized: false, skipped: true }),
+        }));
+      }
+      return;
+    }
+    throw e;
+  }
 
   // Persist blurhash + dimensions onto the existing meta item (written earlier
   // in the pipeline by the metadata extractor). attribute_exists guards against
