@@ -8,5 +8,7 @@ node_modules
 .cdk.staging
 cdk.out
 .DS_Store
+# Test coverage
+coverage/
 # Claude Code worktrees
 .claude/worktrees/
