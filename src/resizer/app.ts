@@ -43,9 +43,15 @@ export const handler: Handler = withMiddlewares(partialHandler).use({
 
     const dynamoDBService = new DynamoDBService({ region, logger });
 
+    // Same-account client (Lambda's own role) for reading in-account source
+    // buckets the media read-access role can't reach — e.g. the diary bucket
+    // holding diary-uploaded images.
+    const localS3Service = new S3Service({ region, logger });
+
     const acServices: AcServices = {
       sourceS3Service,
       destinationS3Service,
+      localS3Service,
       dynamoDBService,
     };
 

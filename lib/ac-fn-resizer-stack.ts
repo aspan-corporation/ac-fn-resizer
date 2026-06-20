@@ -85,7 +85,13 @@ export class AcFnResizerStack extends cdk.Stack {
             ssm.StringParameter.valueForStringParameter(
               this,
               "/ac/iam/media-bucket-access-role-arn"
-            )
+            ),
+          // In-account diary bucket holding diary-uploaded images. Read with the
+          // Lambda's own role (granted below), not the cross-account media role.
+          AC_DIARY_BUCKET_NAME: ssm.StringParameter.valueForStringParameter(
+            this,
+            "/ac/storage/diary-bucket-name"
+          )
         }
       }
     );
@@ -161,6 +167,20 @@ export class AcFnResizerStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ["s3:PutObject"],
         resources: [`${thumbsBucketArn}/*`]
+      })
+    );
+
+    // Allow Lambda to read diary-uploaded source images from the in-account
+    // diary bucket (the cross-account media role can't reach it).
+    const diaryBucketArn = ssm.StringParameter.valueForStringParameter(
+      this,
+      "/ac/storage/diary-bucket-arn"
+    );
+
+    resizerProcessor.processor.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetObject"],
+        resources: [`${diaryBucketArn}/*`]
       })
     );
 
