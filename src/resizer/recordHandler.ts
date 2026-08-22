@@ -1,19 +1,21 @@
 import {
   AcContext,
   assertEnvVar,
+  deriveFolder,
   getThumbnailKey,
   isAllowedExtension,
   MetricUnit,
   DIM_DETAIL_HEIGHT,
   DIM_DETAIL_WIDTH,
   DIM_THUMBNAIL_HEIGHT,
-  DIM_THUMBNAIL_WIDTH
+  DIM_THUMBNAIL_WIDTH,
 } from "@aspan-corporation/ac-shared";
 import { SFNClient, SendTaskSuccessCommand } from "@aws-sdk/client-sfn";
 import type { S3ObjectCreatedNotificationEvent, SQSRecord } from "aws-lambda";
 import assert from "node:assert/strict";
 import { makeThumbnail } from "./makeThumbnail.ts";
 import { computeImageMeta } from "./imageMeta.ts";
+import { buildBlurhashUpdateCommandInput } from "./blurhashUpdate.ts";
 
 const sfnClient = new SFNClient({});
 
@@ -32,12 +34,20 @@ const UNDECODABLE_RE =
 
 export const recordHandler = async (
   record: SQSRecord,
-  context: AcContext
+  context: AcContext,
 ): Promise<void> => {
   const { logger, metrics } = context;
-  const { sourceS3Service, destinationS3Service, localS3Service, dynamoDBService } = context.acServices || {};
+  const {
+    sourceS3Service,
+    destinationS3Service,
+    localS3Service,
+    dynamoDBService,
+  } = context.acServices || {};
   assert(sourceS3Service, "s3Service is required in servicesContext");
-  assert(destinationS3Service, "destinantionS3Service is required in servicesContext");
+  assert(
+    destinationS3Service,
+    "destinantionS3Service is required in servicesContext",
+  );
   assert(dynamoDBService, "dynamoDBService is required in servicesContext");
 
   const payload = record.body;
@@ -48,27 +58,37 @@ export const recordHandler = async (
     parsed = JSON.parse(payload) as Record<string, unknown>;
   } catch (e) {
     logger.error("Failed to parse SQS record payload", { error: e });
-    throw new Error(`Failed to parse SQS record payload: ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(
+      `Failed to parse SQS record payload: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
-  const taskToken = typeof parsed.taskToken === "string" ? parsed.taskToken : undefined;
+  const taskToken =
+    typeof parsed.taskToken === "string" ? parsed.taskToken : undefined;
   const item = parsed as unknown as S3ObjectCreatedNotificationEvent;
 
   const {
     detail: {
       object: { key: sourceKey, size },
-      bucket: { name: sourceBucket }
-    }
+      bucket: { name: sourceBucket },
+    },
   } = item;
 
   assert(sourceKey, "detail.object.key is missing from event payload");
-  assert(size !== undefined && size !== null, "detail.object.size is missing from event payload");
+  assert(
+    size !== undefined && size !== null,
+    "detail.object.size is missing from event payload",
+  );
   assert(sourceBucket, "detail.bucket.name is missing from event payload");
 
   const { Item: metaItem } = await dynamoDBService.getCommand({
     TableName: metaTableName,
     Key: { id: sourceKey },
   });
-  if ((metaItem?.tags as { key: string }[] | undefined)?.some((t) => t.key === TAG_HIDDEN)) {
+  if (
+    (metaItem?.tags as { key: string }[] | undefined)?.some(
+      (t) => t.key === TAG_HIDDEN,
+    )
+  ) {
     logger.info("Skipping hidden file", { sourceKey });
     return;
   }
@@ -85,12 +105,12 @@ export const recordHandler = async (
   // bucket reached via the assumed read-access role.
   const readS3Service =
     diaryBucketName && sourceBucket === diaryBucketName
-      ? localS3Service ?? sourceS3Service
+      ? (localS3Service ?? sourceS3Service)
       : sourceS3Service;
 
   const buffer = await readS3Service.getObject({
     Bucket: sourceBucket,
-    Key: sourceKey
+    Key: sourceKey,
   });
 
   logger.debug("downloaded media file", { sourceBucket, sourceKey, size });
@@ -105,12 +125,12 @@ export const recordHandler = async (
   const detailKey = getThumbnailKey({
     width: DIM_DETAIL_WIDTH,
     height: DIM_DETAIL_HEIGHT,
-    key: sourceKey
+    key: sourceKey,
   });
   const thumbnailKey = getThumbnailKey({
     width: DIM_THUMBNAIL_WIDTH,
     height: DIM_THUMBNAIL_HEIGHT,
-    key: sourceKey
+    key: sourceKey,
   });
 
   // BlurHash + oriented dimensions, computed once from the source buffer in
@@ -131,10 +151,10 @@ export const recordHandler = async (
           destinationBucket,
           destinationKey: detailKey,
           width: DIM_DETAIL_WIDTH,
-          height: DIM_DETAIL_HEIGHT
+          height: DIM_DETAIL_HEIGHT,
         },
         context,
-        destinationS3Service
+        destinationS3Service,
       ),
       makeThumbnail(
         {
@@ -144,11 +164,11 @@ export const recordHandler = async (
           destinationBucket,
           destinationKey: thumbnailKey,
           width: DIM_THUMBNAIL_WIDTH,
-          height: DIM_THUMBNAIL_HEIGHT
+          height: DIM_THUMBNAIL_HEIGHT,
         },
         context,
-        destinationS3Service
-      )
+        destinationS3Service,
+      ),
     ]);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -158,57 +178,69 @@ export const recordHandler = async (
     // existing thumbnail is left in place. Transient errors (S3 blips, etc.)
     // are rethrown so SQS retries them normally.
     if (UNDECODABLE_RE.test(msg)) {
-      logger.warn("undecodable source; skipping thumbnail generation", { sourceKey, error: msg });
+      logger.warn("undecodable source; skipping thumbnail generation", {
+        sourceKey,
+        error: msg,
+      });
       metrics.addMetric("PictureResizingSkipped", MetricUnit.Count, 1);
       if (taskToken) {
-        await sfnClient.send(new SendTaskSuccessCommand({
-          taskToken,
-          output: JSON.stringify({ resized: false, skipped: true }),
-        }));
+        await sfnClient.send(
+          new SendTaskSuccessCommand({
+            taskToken,
+            output: JSON.stringify({ resized: false, skipped: true }),
+          }),
+        );
       }
       return;
     }
     throw e;
   }
 
-  // Persist blurhash + dimensions onto the existing meta item (written earlier
-  // in the pipeline by the metadata extractor). attribute_exists guards against
-  // creating a tagless partial item if the meta row isn't present yet; a miss
-  // is logged and ignored so it never fails the resize/SendTaskSuccess.
+  // Persist blurhash + dimensions onto the meta item. The resizer can race the
+  // meta-extractor (no ordering is enforced between the two), so this upsert
+  // seeds `tags`/`folder` via if_not_exists when the row doesn't exist yet
+  // instead of refusing to write: a plain UpdateItem with no meta row present
+  // would otherwise create a tagless, folder-less item, which breaks the
+  // meta-table stream consumer (throws on undefined tags) and drops the item
+  // out of the by-folder GSI until a future write repairs it. Whichever
+  // Lambda writes second can never clobber the other's fields — processMeta
+  // only ever sets `tags`/`folder`, this only ever sets `blurhash`/`width`/
+  // `height` — so if_not_exists is safe in either arrival order.
   const imageMeta = await imageMetaPromise;
   if (imageMeta) {
     try {
-      await dynamoDBService.updateCommand({
-        TableName: metaTableName,
-        Key: { id: sourceKey },
-        UpdateExpression: "SET #bh = :bh, #w = :w, #h = :h",
-        ConditionExpression: "attribute_exists(id)",
-        ExpressionAttributeNames: { "#bh": "blurhash", "#w": "width", "#h": "height" },
-        ExpressionAttributeValues: {
-          ":bh": imageMeta.blurhash,
-          ":w": imageMeta.width,
-          ":h": imageMeta.height
-        }
-      });
+      await dynamoDBService.updateCommand(
+        buildBlurhashUpdateCommandInput({
+          sourceKey,
+          metaTableName,
+          blurhash: imageMeta.blurhash,
+          width: imageMeta.width,
+          height: imageMeta.height,
+          folder: deriveFolder(sourceKey),
+        }),
+      );
     } catch (e) {
-      const name = e instanceof Error ? e.name : String(e);
-      if (name === "ConditionalCheckFailedException") {
-        logger.warn("meta item absent; skipped blurhash/dimensions write", { sourceKey });
-      } else {
-        logger.error("failed to write blurhash/dimensions", { sourceKey, error: e });
-      }
+      logger.error("failed to write blurhash/dimensions", {
+        sourceKey,
+        error: e,
+      });
     }
   } else {
-    logger.warn("could not compute image metadata; skipped blurhash/dimensions", { sourceKey });
+    logger.warn(
+      "could not compute image metadata; skipped blurhash/dimensions",
+      { sourceKey },
+    );
   }
 
   logger.debug("PictureResizingsFinished", { sourceKey });
   metrics.addMetric("PictureResizingsFinished", MetricUnit.Count, 1);
 
   if (taskToken) {
-    await sfnClient.send(new SendTaskSuccessCommand({
-      taskToken,
-      output: JSON.stringify({ resized: true }),
-    }));
+    await sfnClient.send(
+      new SendTaskSuccessCommand({
+        taskToken,
+        output: JSON.stringify({ resized: true }),
+      }),
+    );
   }
 };
