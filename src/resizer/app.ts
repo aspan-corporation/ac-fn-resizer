@@ -5,7 +5,6 @@ import {
   getIdempotencyOptions,
   getPartialResponseHandler,
   S3Service,
-  STSService,
   withMiddlewares,
   makeIdempotent
 } from "@aspan-corporation/ac-shared";
@@ -22,19 +21,13 @@ const partialHandler = getPartialResponseHandler(idempotentRecordHandler);
 export const handler: Handler = withMiddlewares(partialHandler).use({
   before: async ({ context }) => {
     const { logger } = context;
-    const stsService = new STSService({ region, logger });
 
-    const assumeRoleCommandOutput = await stsService.assumeRole({
-      RoleArn: assertEnvVar("AC_TAU_MEDIA_MEDIA_BUCKET_ACCESS_ROLE_ARN"),
-      RoleSessionName: "ac-fn-resizer",
-      ExternalId: "ac"
-    });
-
-    const sourceS3Service = new S3Service({
-      region,
-      assumeRoleCommandOutput,
-      logger
-    });
+    // The media library and the diary both live in the same consolidated
+    // bucket now (see MediaBucket, AcAppStack) — the Lambda's own execution
+    // role is granted GetObject directly (see the stack's diaryBucketArn
+    // grant, which covers the whole bucket since that SSM value now points
+    // here too). No cross-account assume-role needed any more.
+    const sourceS3Service = new S3Service({ region, logger });
 
     const destinationS3Service = new S3Service({
       region,
@@ -43,15 +36,9 @@ export const handler: Handler = withMiddlewares(partialHandler).use({
 
     const dynamoDBService = new DynamoDBService({ region, logger });
 
-    // Same-account client (Lambda's own role) for reading in-account source
-    // buckets the media read-access role can't reach — e.g. the diary bucket
-    // holding diary-uploaded images.
-    const localS3Service = new S3Service({ region, logger });
-
     const acServices: AcServices = {
       sourceS3Service,
       destinationS3Service,
-      localS3Service,
       dynamoDBService,
     };
 

@@ -80,18 +80,7 @@ export class AcFnResizerStack extends cdk.Stack {
             ssm.StringParameter.valueForStringParameter(
               this,
               "/ac/data/meta-table-name"
-            ),
-          AC_TAU_MEDIA_MEDIA_BUCKET_ACCESS_ROLE_ARN:
-            ssm.StringParameter.valueForStringParameter(
-              this,
-              "/ac/iam/media-bucket-access-role-arn"
-            ),
-          // In-account diary bucket holding diary-uploaded images. Read with the
-          // Lambda's own role (granted below), not the cross-account media role.
-          AC_DIARY_BUCKET_NAME: ssm.StringParameter.valueForStringParameter(
-            this,
-            "/ac/storage/diary-bucket-name"
-          )
+            )
         }
       }
     );
@@ -147,16 +136,6 @@ export class AcFnResizerStack extends cdk.Stack {
       })
     );
 
-    // Allow Lambda to assume the S3 media read access role
-    resizerProcessor.processor.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["sts:AssumeRole"],
-        resources: [
-          `arn:aws:iam::${this.account}:role/aspan-corporation/ac-s3-media-read-access`
-        ]
-      })
-    );
-
     // Allow Lambda to put objects to thumbs bucket
     const thumbsBucketArn = ssm.StringParameter.valueForStringParameter(
       this,
@@ -170,9 +149,12 @@ export class AcFnResizerStack extends cdk.Stack {
       })
     );
 
-    // Allow Lambda to read diary-uploaded source images from the in-account
-    // diary bucket (the cross-account media role can't reach it).
-    const diaryBucketArn = ssm.StringParameter.valueForStringParameter(
+    // Read grant for the consolidated media bucket (media/ and diary/ alike —
+    // /ac/storage/diary-bucket-arn resolves to the same bucket as
+    // /ac/storage/media-bucket-name since the cutover to MediaBucket). No
+    // cross-account assume-role needed any more; the Lambda's own execution
+    // role reads it directly.
+    const mediaBucketArn = ssm.StringParameter.valueForStringParameter(
       this,
       "/ac/storage/diary-bucket-arn"
     );
@@ -180,7 +162,7 @@ export class AcFnResizerStack extends cdk.Stack {
     resizerProcessor.processor.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["s3:GetObject"],
-        resources: [`${diaryBucketArn}/*`]
+        resources: [`${mediaBucketArn}/*`]
       })
     );
 

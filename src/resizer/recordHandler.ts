@@ -21,10 +21,6 @@ const sfnClient = new SFNClient({});
 
 const destinationBucket = assertEnvVar("DESTINATION_BUCKET_NAME");
 const metaTableName = assertEnvVar("AC_TAU_MEDIA_META_TABLE_NAME");
-// In-account bucket holding diary-uploaded images. When the event names this
-// bucket the source must be read with the Lambda's own role, not the
-// cross-account media read-access role.
-const diaryBucketName = process.env.AC_DIARY_BUCKET_NAME;
 const TAG_HIDDEN = "ac:ediacara:hidden";
 
 // Sharp/libvips/libheif messages for permanent (non-retryable) decode
@@ -37,12 +33,8 @@ export const recordHandler = async (
   context: AcContext,
 ): Promise<void> => {
   const { logger, metrics } = context;
-  const {
-    sourceS3Service,
-    destinationS3Service,
-    localS3Service,
-    dynamoDBService,
-  } = context.acServices || {};
+  const { sourceS3Service, destinationS3Service, dynamoDBService } =
+    context.acServices || {};
   assert(sourceS3Service, "s3Service is required in servicesContext");
   assert(
     destinationS3Service,
@@ -100,15 +92,7 @@ export const recordHandler = async (
     throw new Error(`extension for ${sourceKey} is not supported`);
   }
 
-  // Pick the read client by source bucket: the diary bucket lives in this
-  // account (Lambda's own role); everything else is the cross-account media
-  // bucket reached via the assumed read-access role.
-  const readS3Service =
-    diaryBucketName && sourceBucket === diaryBucketName
-      ? (localS3Service ?? sourceS3Service)
-      : sourceS3Service;
-
-  const buffer = await readS3Service.getObject({
+  const buffer = await sourceS3Service.getObject({
     Bucket: sourceBucket,
     Key: sourceKey,
   });
